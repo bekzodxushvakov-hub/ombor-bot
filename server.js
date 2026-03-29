@@ -1,5 +1,5 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const session = require('express-session');
 
 const app = express();
@@ -7,7 +7,7 @@ const PORT = 3000;
 
 const PASSWORD = "8504";
 
-const db = new sqlite3.Database('./ombor.db');
+const db = new Database('ombor.db');
 
 // POST ишлаши учун
 app.use(express.urlencoded({ extended: true }));
