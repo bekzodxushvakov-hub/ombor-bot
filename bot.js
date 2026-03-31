@@ -117,6 +117,40 @@ bot.onText(/\/report/, (msg) => {
   bot.sendMessage(msg.chat.id, text);
 });
 
+bot.onText(/\/analytics/, (msg) => {
+  const chatId = msg.chat.id;
+
+  const topItem = db.prepare(`
+    SELECT name, SUM(quantity) as total
+    FROM items
+    WHERE type='out'
+    GROUP BY name
+    ORDER BY total DESC
+    LIMIT 1
+  `).get();
+
+  const topProject = db.prepare(`
+    SELECT project, SUM(quantity) as total
+    FROM items
+    WHERE type='out'
+    GROUP BY project
+    ORDER BY total DESC
+    LIMIT 1
+  `).get();
+
+  let text = "📊 Аналитика:\n\n";
+
+  if (topItem) {
+    text += `🔥 Энг кўп кетган товар:\n${topItem.name} — ${topItem.total}\n\n`;
+  }
+
+  if (topProject) {
+    text += `🏗 Энг кўп сарф қилган лойиҳа:\n${topProject.project} — ${topProject.total}`;
+  }
+
+  bot.sendMessage(chatId, text);
+});
+
 // MAIN
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
