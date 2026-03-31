@@ -3,8 +3,8 @@ const ExcelJS = require('exceljs');
 const TelegramBot = require('node-telegram-bot-api');
 const Database = require('better-sqlite3');
 
-const ADMIN_ID = 363167991;
 const token = process.env.BOT_TOKEN;
+const ADMIN_ID = 363167991;
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -32,6 +32,26 @@ CREATE TABLE IF NOT EXISTS projects (
 )
 `).run();
 
+db.prepare(`
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER UNIQUE,
+  name TEXT,
+  role TEXT
+)
+`).run();
+
+// ADMIN qo‘shish
+db.prepare(`
+INSERT OR IGNORE INTO users (chat_id, name, role)
+VALUES (?, ?, 'admin')
+`).run(ADMIN_ID, 'Admin');
+
+// USER FUNCTION
+function getUser(chatId) {
+  return db.prepare(`SELECT * FROM users WHERE chat_id=?`).get(chatId);
+}
+
 // STATE
 const userState = {};
 
@@ -54,6 +74,24 @@ bot.onText(/\/menu/, (msg) => {
   });
 });
 
+// ADD USER (admin only)
+bot.onText(/\/adduser (.+)/, (msg, match) => {
+  const admin = getUser(msg.chat.id);
+
+  if (!admin || admin.role !== 'admin') {
+    return bot.sendMessage(msg.chat.id, "⛔ Фақат админ");
+  }
+
+  const newId = parseInt(match[1]);
+
+  db.prepare(`
+    INSERT OR IGNORE INTO users (chat_id, role)
+    VALUES (?, 'worker')
+  `).run(newId);
+
+  bot.sendMessage(msg.chat.id, "✅ Ходим қўшилди");
+});
+
 // REPORT
 bot.onText(/\/report/, (msg) => {
   const rows = db.prepare(`
@@ -63,33 +101,31 @@ bot.onText(/\/report/, (msg) => {
     GROUP BY project, name
   `).all();
 
-  if (!rows.length) {
-    return bot.sendMessage(msg.chat.id, "📊 Маълумот йўқ");
-  }
+  if (!rows.length) return bot.sendMessage(msg.chat.id, "📊 Йўқ");
 
-  let result = "📊 Лойиҳалар:\n\n";
+  let text = "📊 Лойиҳалар:\n\n";
   let current = "";
 
   rows.forEach(r => {
     if (current !== r.project) {
       current = r.project;
-      result += `\n🏗 ${r.project}:\n`;
+      text += `\n🏗 ${r.project}:\n`;
     }
-    result += `- ${r.name}: ${r.total}\n`;
+    text += `- ${r.name}: ${r.total}\n`;
   });
 
-  bot.sendMessage(msg.chat.id, result);
+  bot.sendMessage(msg.chat.id, text);
 });
 
-// MESSAGE
+// MAIN
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  if (chatId !== ADMIN_ID) {
-    return bot.sendMessage(chatId, "⛔ Рухсат йўқ");
-  }
+  const user = getUser(chatId);
+  if (!user) return bot.sendMessage(chatId, "⛔ Рухсат йўқ");
 
+  // BUTTONS
   if (text === "📥 Кирим") {
     userState[chatId] = { step: 'name' };
     return bot.sendMessage(chatId, "📦 Товар номи?");
@@ -107,8 +143,6 @@ bot.on('message', (msg) => {
       FROM items GROUP BY name
     `).all();
 
-    if (!rows.length) return bot.sendMessage(chatId, "📦 Бўш");
-
     let text = "📦 Қолдиқ:\n";
     rows.forEach(r => text += `${r.name}: ${r.total}\n`);
 
@@ -117,8 +151,6 @@ bot.on('message', (msg) => {
 
   if (text === "📁 Лойиҳалар") {
     const rows = db.prepare(`SELECT * FROM projects`).all();
-
-    if (!rows.length) return bot.sendMessage(chatId, "📭 Йўқ");
 
     let text = "📋 Лойиҳалар:\n";
     rows.forEach(r => text += `${r.name} (${r.manager})\n`);
@@ -132,7 +164,6 @@ bot.on('message', (msg) => {
   }
 
   if (!userState[chatId]) return;
-
   const state = userState[chatId];
 
   // PROJECT
@@ -203,31 +234,6 @@ bot.on('message', (msg) => {
   }
 });
 
-// EXCEL
-bot.onText(/\/excel/, async (msg) => {
-  const rows = db.prepare(`SELECT * FROM items`).all();
-
-  if (!rows.length) return bot.sendMessage(msg.chat.id, "📊 Йўқ");
-
-  const wb = new ExcelJS.Workbook();
-  const sheet = wb.addWorksheet('Ombor');
-
-  sheet.columns = [
-    { header: 'ID', key: 'id' },
-    { header: 'Name', key: 'name' },
-    { header: 'Qty', key: 'quantity' },
-    { header: 'Type', key: 'type' },
-    { header: 'Person', key: 'person' },
-    { header: 'Project', key: 'project' },
-    { header: 'Date', key: 'date' }
-  ];
-
-  rows.forEach(r => sheet.addRow(r));
-
-  await wb.xlsx.writeFile('hisobot.xlsx');
-  bot.sendDocument(msg.chat.id, 'hisobot.xlsx');
-});
-
 // DAILY REPORT
 cron.schedule('0 18 * * *', () => {
   const inData = db.prepare(`SELECT SUM(quantity) as total FROM items WHERE type='in'`).get();
@@ -237,4 +243,4 @@ cron.schedule('0 18 * * *', () => {
   bot.sendMessage(ADMIN_ID, text);
 });
 
-console.log("🤖 Bot ishlayapti...");
+console.log("🤖 Bot ишлаяпти...");
