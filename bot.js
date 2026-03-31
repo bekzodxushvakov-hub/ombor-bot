@@ -5,7 +5,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const sqlite3 = require('sqlite3').verbose();
 
 // TOKEN (ўзингникини қўй!)
-const token = '8773337414:AAE-MFcL4P_PjqpTfkvW4iIc5-g1kV5Yl7g';
+const token = process.env.BOT_TOKEN;
 
 // BOT
 const bot = new TelegramBot(token, { polling: true });

@@ -2,14 +2,30 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const session = require('express-session');
 
+require('./bot');
+const token = process.env.BOT_TOKEN;
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const PASSWORD = "8504";
 
 const db = new Database('ombor.db');
 
-// POST ишлаши учун
+// TABLE (agar yo'q bo'lsa yaratadi)
+db.prepare(`
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT,
+  quantity INTEGER,
+  type TEXT,
+  person TEXT,
+  project TEXT,
+  date TEXT
+)
+`).run();
+
+// POST
 app.use(express.urlencoded({ extended: true }));
 
 // SESSION
@@ -22,21 +38,21 @@ app.use(session({
 // ===== LOGIN PAGE =====
 app.get('/login', (req, res) => {
   res.send(`
-    <html>
-    <head>
-      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    </head>
-    <body class="container mt-5">
+  <html>
+  <head>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  </head>
+  <body class="container mt-5">
 
-      <h3>🔐 Кириш</h3>
+    <h3>🔐 Кириш</h3>
 
-      <form method="POST" action="/login">
-        <input type="password" name="password" class="form-control mb-2" placeholder="Пароль" />
-        <button class="btn btn-primary">Кириш</button>
-      </form>
+    <form method="POST" action="/login">
+      <input type="password" name="password" class="form-control mb-2" placeholder="Пароль" />
+      <button class="btn btn-primary">Кириш</button>
+    </form>
 
-    </body>
-    </html>
+  </body>
+  </html>
   `);
 });
 
@@ -57,7 +73,7 @@ app.get('/logout', (req, res) => {
   });
 });
 
-// ===== AUTH MIDDLEWARE =====
+// ===== AUTH =====
 function checkAuth(req, res, next) {
   if (!req.session.auth) {
     return res.redirect('/login');
@@ -67,63 +83,51 @@ function checkAuth(req, res, next) {
 
 // ===== DELETE =====
 app.get('/delete/:id', checkAuth, (req, res) => {
-  const id = req.params.id;
-
-  db.run(`DELETE FROM items WHERE id=?`, [id], () => {
-    res.redirect('/');
-  });
+  db.prepare(`DELETE FROM items WHERE id=?`).run(req.params.id);
+  res.redirect('/');
 });
 
 // ===== EDIT PAGE =====
 app.get('/edit/:id', checkAuth, (req, res) => {
-  const id = req.params.id;
+  const r = db.prepare(`SELECT * FROM items WHERE id=?`).get(req.params.id);
 
-  db.get(`SELECT * FROM items WHERE id=?`, [id], (err, r) => {
+  if (!r) return res.send("Маълумот топилмади");
 
-    if (!r) {
-      return res.send("Маълумот топилмади");
-    }
+  res.send(`
+  <html>
+  <head>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  </head>
+  <body class="container mt-5">
 
-    let html = `
-    <html>
-    <head>
-      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    </head>
-    <body class="container mt-5">
+  <h3>✏️ Таҳрирлаш</h3>
 
-    <h3>✏️ Таҳрирлаш</h3>
+  <form method="POST" action="/update/${r.id}">
+    <input name="name" value="${r.name}" class="form-control mb-2" />
+    <input name="quantity" value="${r.quantity}" class="form-control mb-2" />
+    <input name="person" value="${r.person}" class="form-control mb-2" />
+    <input name="project" value="${r.project}" class="form-control mb-2" />
 
-    <form method="POST" action="/update/${r.id}">
-      <input name="name" value="${r.name}" class="form-control mb-2" />
-      <input name="quantity" value="${r.quantity}" class="form-control mb-2" />
-      <input name="person" value="${r.person}" class="form-control mb-2" />
-      <input name="project" value="${r.project}" class="form-control mb-2" />
+    <button class="btn btn-success">Сақлаш</button>
+    <a href="/" class="btn btn-secondary">Орқага</a>
+  </form>
 
-      <button class="btn btn-success">Сақлаш</button>
-      <a href="/" class="btn btn-secondary">Орқага</a>
-    </form>
-
-    </body>
-    </html>
-    `;
-
-    res.send(html);
-  });
+  </body>
+  </html>
+  `);
 });
 
 // ===== UPDATE =====
 app.post('/update/:id', checkAuth, (req, res) => {
-  const id = req.params.id;
-
   const { name, quantity, person, project } = req.body;
 
-  db.run(
-    `UPDATE items SET name=?, quantity=?, person=?, project=? WHERE id=?`,
-    [name, quantity, person, project, id],
-    () => {
-      res.redirect('/');
-    }
-  );
+  db.prepare(`
+    UPDATE items 
+    SET name=?, quantity=?, person=?, project=? 
+    WHERE id=?
+  `).run(name, quantity, person, project, req.params.id);
+
+  res.redirect('/');
 });
 
 // ===== MAIN PAGE =====
@@ -134,22 +138,12 @@ app.get('/', checkAuth, (req, res) => {
 
   let query = "SELECT * FROM items WHERE 1=1";
 
-  if (project) {
-    query += ` AND project LIKE '%${project}%'`;
-  }
+  if (project) query += ` AND project LIKE '%${project}%'`;
+  if (search) query += ` AND name LIKE '%${search}%'`;
 
-  if (search) {
-    query += ` AND name LIKE '%${search}%'`;
-  }
+  const rows = db.prepare(query).all();
 
-  db.all(query, [], (err, rows) => {
-
-    if (err) {
-      console.log(err);
-      return res.send("❌ База хатолик");
-    }
-
-    let html = `
+  let html = `
 <html>
 <head>
   <title>Ombor</title>
@@ -168,7 +162,6 @@ app.get('/', checkAuth, (req, res) => {
   <div class="card shadow">
     <div class="card-body">
 
-      <!-- FILTER -->
       <form method="GET" class="row g-2 mb-3">
         <div class="col-md-4">
           <input type="text" name="project" placeholder="🏗 Лойиҳа" value="${project}" class="form-control">
@@ -197,37 +190,34 @@ app.get('/', checkAuth, (req, res) => {
         <tbody>
 `;
 
-    if (!rows || rows.length === 0) {
-      html += `<tr><td colspan="8" class="text-center">Маълумот топилмади</td></tr>`;
-    } else {
-      rows.forEach(r => {
+  if (!rows.length) {
+    html += `<tr><td colspan="8" class="text-center">Маълумот топилмади</td></tr>`;
+  } else {
+    rows.forEach(r => {
+      let typeBadge = r.type === 'in'
+        ? `<span class="badge bg-success">Кирим</span>`
+        : `<span class="badge bg-danger">Чиқим</span>`;
 
-        let typeBadge = r.type === 'in'
-          ? `<span class="badge bg-success">Кирим</span>`
-          : `<span class="badge bg-danger">Чиқим</span>`;
+      html += `
+      <tr>
+        <td>${r.id}</td>
+        <td><b>${r.name}</b></td>
+        <td>${r.quantity}</td>
+        <td>${typeBadge}</td>
+        <td>${r.person}</td>
+        <td>${r.project}</td>
+        <td>${r.date}</td>
+        <td>
+          <a href="/edit/${r.id}" class="btn btn-warning btn-sm">✏️</a>
+          <a href="/delete/${r.id}" class="btn btn-danger btn-sm"
+             onclick="return confirm('Ўчиришни тасдиқлайсизми?')">🗑</a>
+        </td>
+      </tr>
+      `;
+    });
+  }
 
-        html += `
-        <tr>
-          <td>${r.id}</td>
-          <td><b>${r.name}</b></td>
-          <td>${r.quantity}</td>
-          <td>${typeBadge}</td>
-          <td>${r.person}</td>
-          <td>${r.project}</td>
-          <td>${r.date}</td>
-          <td>
-            <a href="/edit/${r.id}" class="btn btn-warning btn-sm">✏️</a>
-            <a href="/delete/${r.id}" class="btn btn-danger btn-sm"
-               onclick="return confirm('Ростдан ҳам ўчирмоқчимисиз?')">
-               🗑
-            </a>
-          </td>
-        </tr>
-        `;
-      });
-    }
-
-    html += `
+  html += `
         </tbody>
       </table>
 
@@ -240,11 +230,10 @@ app.get('/', checkAuth, (req, res) => {
 </html>
 `;
 
-    res.send(html);
-  });
-
+  res.send(html);
 });
 
-app.listen(PORT, '172.16.20.34', () => {
-  console.log(`🚀 Server ishlayapti: http://localhost:${3000}`);
+// SERVER
+app.listen(PORT, '0.0.0.0', () => {
+  console.log("🚀 Server ishlayapti");
 });
