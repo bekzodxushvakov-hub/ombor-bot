@@ -1,20 +1,18 @@
 const cron = require('node-cron');
-const ADMIN_ID = 363167991;
 const ExcelJS = require('exceljs');
 const TelegramBot = require('node-telegram-bot-api');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 
-// TOKEN (ўзингникини қўй!)
+const ADMIN_ID = 363167991;
 const token = process.env.BOT_TOKEN;
 
-// BOT
 const bot = new TelegramBot(token, { polling: true });
 
 // DATABASE
-const db = new sqlite3.Database('./ombor.db');
+const db = new Database('ombor.db');
 
-// ===== TABLES =====
-db.run(`
+// TABLES
+db.prepare(`
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT,
@@ -24,25 +22,25 @@ CREATE TABLE IF NOT EXISTS items (
   project TEXT,
   date TEXT
 )
-`);
+`).run();
 
-db.run(`
+db.prepare(`
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT,
   manager TEXT
 )
-`);
+`).run();
 
-// ===== STATE =====
+// STATE
 const userState = {};
 
-// ===== START =====
+// START
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "👋 Омбор бот ишга тушди!\n/menu ни босинг");
+  bot.sendMessage(msg.chat.id, "👋 Омбор бот ишлаяпти!\n/menu ни босинг");
 });
 
-// ===== MENU =====
+// MENU
 bot.onText(/\/menu/, (msg) => {
   bot.sendMessage(msg.chat.id, "Танланг:", {
     reply_markup: {
@@ -56,52 +54,42 @@ bot.onText(/\/menu/, (msg) => {
   });
 });
 
-// ===== REPORT (ХАТОГА ЧИДАМЛИ) =====
+// REPORT
 bot.onText(/\/report/, (msg) => {
-  const chatId = msg.chat.id;
-
-  db.all(`
+  const rows = db.prepare(`
     SELECT project, name, SUM(quantity) as total
     FROM items
     WHERE type='out'
     GROUP BY project, name
-    ORDER BY project
-  `, [], (err, rows) => {
+  `).all();
 
-    if (err) {
-      console.log("SQL ERROR:", err);
-      return bot.sendMessage(chatId, "❌ Хатолик юз берди");
+  if (!rows.length) {
+    return bot.sendMessage(msg.chat.id, "📊 Маълумот йўқ");
+  }
+
+  let result = "📊 Лойиҳалар:\n\n";
+  let current = "";
+
+  rows.forEach(r => {
+    if (current !== r.project) {
+      current = r.project;
+      result += `\n🏗 ${r.project}:\n`;
     }
-
-    if (!rows || rows.length === 0) {
-      return bot.sendMessage(chatId, "📊 Ҳали маълумот йўқ");
-    }
-
-    let result = "📊 Лойиҳалар бўйича:\n\n";
-    let currentProject = "";
-
-    rows.forEach(r => {
-      if (currentProject !== r.project) {
-        currentProject = r.project;
-        result += `\n🏗 ${r.project}:\n`;
-      }
-
-      result += `  - ${r.name}: ${r.total}\n`;
-    });
-
-    bot.sendMessage(chatId, result);
+    result += `- ${r.name}: ${r.total}\n`;
   });
+
+  bot.sendMessage(msg.chat.id, result);
 });
 
-// ===== MAIN LOGIC =====
+// MESSAGE
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  // ===== BUTTONS =====
-  if (msg.chat.id !== ADMIN_ID) {
-  return bot.sendMessage(msg.chat.id, "⛔ Сизда рухсат йўқ");
-}
+  if (chatId !== ADMIN_ID) {
+    return bot.sendMessage(chatId, "⛔ Рухсат йўқ");
+  }
+
   if (text === "📥 Кирим") {
     userState[chatId] = { step: 'name' };
     return bot.sendMessage(chatId, "📦 Товар номи?");
@@ -113,79 +101,56 @@ bot.on('message', (msg) => {
   }
 
   if (text === "📦 Қолдиқ") {
-    db.all(`
+    const rows = db.prepare(`
       SELECT name,
       SUM(CASE WHEN type='in' THEN quantity ELSE -quantity END) as total
-      FROM items
-      GROUP BY name
-    `, [], (err, rows) => {
+      FROM items GROUP BY name
+    `).all();
 
-      if (err) {
-        return bot.sendMessage(chatId, "❌ Хатолик");
-      }
+    if (!rows.length) return bot.sendMessage(chatId, "📦 Бўш");
 
-      if (!rows || rows.length === 0) {
-        return bot.sendMessage(chatId, "📦 Омбор бўш");
-      }
+    let text = "📦 Қолдиқ:\n";
+    rows.forEach(r => text += `${r.name}: ${r.total}\n`);
 
-      let result = "📦 Қолдиқ:\n";
-      rows.forEach(r => {
-        result += `${r.name}: ${r.total}\n`;
-      });
-
-      bot.sendMessage(chatId, result);
-    });
-    return;
+    return bot.sendMessage(chatId, text);
   }
 
   if (text === "📁 Лойиҳалар") {
-    db.all(`SELECT * FROM projects`, [], (err, rows) => {
+    const rows = db.prepare(`SELECT * FROM projects`).all();
 
-      if (!rows || rows.length === 0) {
-        return bot.sendMessage(chatId, "📭 Лойиҳа йўқ");
-      }
+    if (!rows.length) return bot.sendMessage(chatId, "📭 Йўқ");
 
-      let result = "📋 Лойиҳалар:\n";
-      rows.forEach(r => {
-        result += `${r.id}. ${r.name} (👤 ${r.manager})\n`;
-      });
+    let text = "📋 Лойиҳалар:\n";
+    rows.forEach(r => text += `${r.name} (${r.manager})\n`);
 
-      bot.sendMessage(chatId, result);
-    });
-    return;
+    return bot.sendMessage(chatId, text);
   }
 
   if (text === "➕ Лойиҳа қўшиш") {
     userState[chatId] = { step: 'project_name' };
-    return bot.sendMessage(chatId, "📁 Лойиҳа номи?");
+    return bot.sendMessage(chatId, "📁 Номи?");
   }
 
-  // ===== FORM =====
   if (!userState[chatId]) return;
 
   const state = userState[chatId];
 
-  // ---- PROJECT ----
+  // PROJECT
   if (state.step === 'project_name') {
     state.name = text;
     state.step = 'project_manager';
-    return bot.sendMessage(chatId, "👤 Жавобгар ким?");
+    return bot.sendMessage(chatId, "👤 Ким?");
   }
 
   if (state.step === 'project_manager') {
-    state.manager = text;
+    db.prepare(`INSERT INTO projects (name, manager) VALUES (?, ?)`)
+      .run(state.name, text);
 
-    db.run(
-      `INSERT INTO projects (name, manager) VALUES (?, ?)`,
-      [state.name, state.manager]
-    );
-
-    bot.sendMessage(chatId, "✅ Лойиҳа сақланди!");
     delete userState[chatId];
-    return;
+    return bot.sendMessage(chatId, "✅ Сақланди");
   }
 
-  // ---- KIRIM ----
+  // KIRIM
   if (state.step === 'name') {
     state.name = text;
     state.step = 'quantity';
@@ -193,184 +158,83 @@ bot.on('message', (msg) => {
   }
 
   if (state.step === 'quantity') {
-    const qty = parseInt(text);
-    if (isNaN(qty)) return bot.sendMessage(chatId, "❗ Сон киритинг");
-
-    state.quantity = qty;
+    state.quantity = parseInt(text);
     state.step = 'person';
-    return bot.sendMessage(chatId, "👤 Ким олиб келди?");
+    return bot.sendMessage(chatId, "👤 Ким?");
   }
 
   if (state.step === 'person') {
-    state.person = text;
+    db.prepare(`
+      INSERT INTO items (name, quantity, type, person, project, date)
+      VALUES (?, ?, 'in', ?, '-', ?)
+    `).run(state.name, state.quantity, text, new Date().toISOString());
 
-    db.run(
-      `INSERT INTO items (name, quantity, type, person, project, date) VALUES (?, ?, ?, ?, ?, ?)`,
-      [state.name, state.quantity, 'in', state.person, '-', new Date().toISOString()]
-    );
-
-    bot.sendMessage(chatId, "✅ Кирим сақланди!");
     delete userState[chatId];
-    return;
+    return bot.sendMessage(chatId, "✅ Кирим сақланди");
   }
 
-  // ---- CHIQIM ----
+  // CHIQIM
   if (state.step === 'name_out') {
     state.name = text;
     state.step = 'quantity_out';
-    return bot.sendMessage(chatId, "🔢 Қанча чиқди?");
+    return bot.sendMessage(chatId, "🔢 Миқдор?");
   }
 
   if (state.step === 'quantity_out') {
-    const qty = parseInt(text);
-    if (isNaN(qty)) return bot.sendMessage(chatId, "❗ Сон киритинг");
-
-    state.quantity = qty;
+    state.quantity = parseInt(text);
     state.step = 'person_out';
-    return bot.sendMessage(chatId, "👤 Ким олди?");
+    return bot.sendMessage(chatId, "👤 Ким?");
   }
 
   if (state.step === 'person_out') {
     state.person = text;
     state.step = 'project';
-    return bot.sendMessage(chatId, "🏗 Қайси лойиҳа?");
+    return bot.sendMessage(chatId, "🏗 Лойиҳа?");
   }
 
   if (state.step === 'project') {
-    state.project = text;
+    db.prepare(`
+      INSERT INTO items (name, quantity, type, person, project, date)
+      VALUES (?, ?, 'out', ?, ?, ?)
+    `).run(state.name, state.quantity, state.person, text, new Date().toISOString());
 
-    db.run(
-      `INSERT INTO items (name, quantity, type, person, project, date) VALUES (?, ?, ?, ?, ?, ?)`,
-      [state.name, state.quantity, 'out', state.person, state.project, new Date().toISOString()]
-    );
-
-    bot.sendMessage(chatId, "📤 Чиқим сақланди!");
     delete userState[chatId];
-    return;
+    return bot.sendMessage(chatId, "📤 Чиқим сақланди");
   }
 });
-// EXCEL EXPORT
-const ExcelJS = require('exceljs');
 
+// EXCEL
 bot.onText(/\/excel/, async (msg) => {
-  const chatId = msg.chat.id;
+  const rows = db.prepare(`SELECT * FROM items`).all();
 
-  db.all(`SELECT * FROM items`, [], async (err, rows) => {
+  if (!rows.length) return bot.sendMessage(msg.chat.id, "📊 Йўқ");
 
-    if (err) {
-      console.log(err);
-      return bot.sendMessage(chatId, "❌ SQL хатолик");
-    }
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Ombor');
 
-    if (!rows || rows.length === 0) {
-      return bot.sendMessage(chatId, "📊 Маълумот йўқ");
-    }
+  sheet.columns = [
+    { header: 'ID', key: 'id' },
+    { header: 'Name', key: 'name' },
+    { header: 'Qty', key: 'quantity' },
+    { header: 'Type', key: 'type' },
+    { header: 'Person', key: 'person' },
+    { header: 'Project', key: 'project' },
+    { header: 'Date', key: 'date' }
+  ];
 
-    try {
-      const workbook = new ExcelJS.Workbook();
-      const sheet = workbook.addWorksheet('Ombor');
+  rows.forEach(r => sheet.addRow(r));
 
-      sheet.columns = [
-        { header: 'ID', key: 'id' },
-        { header: 'Tovar', key: 'name' },
-        { header: 'Miqdor', key: 'quantity' },
-        { header: 'Type', key: 'type' },
-        { header: 'Kim', key: 'person' },
-        { header: 'Loyiha', key: 'project' },
-        { header: 'Sana', key: 'date' }
-      ];
-
-      rows.forEach(r => sheet.addRow(r));
-
-      const filePath = 'hisobot.xlsx';
-
-      await workbook.xlsx.writeFile(filePath);
-
-      bot.sendDocument(chatId, filePath);
-
-    } catch (e) {
-      console.log(e);
-      bot.sendMessage(chatId, "❌ Excel хатолик");
-    }
-
-  });
+  await wb.xlsx.writeFile('hisobot.xlsx');
+  bot.sendDocument(msg.chat.id, 'hisobot.xlsx');
 });
-// DAILY REPORT (18:00)
+
+// DAILY REPORT
 cron.schedule('0 18 * * *', () => {
+  const inData = db.prepare(`SELECT SUM(quantity) as total FROM items WHERE type='in'`).get();
+  const outData = db.prepare(`SELECT SUM(quantity) as total FROM items WHERE type='out'`).get();
 
-  const chatId = ADMIN_ID;
-
-  // Кирим
-  db.get(`
-    SELECT SUM(quantity) as total FROM items WHERE type='in'
-  `, [], (err, inData) => {
-
-    // Чиқим
-    db.get(`
-      SELECT SUM(quantity) as total FROM items WHERE type='out'
-    `, [], (err, outData) => {
-
-      // Лойиҳа бўйича
-      db.all(`
-        SELECT project, SUM(quantity) as total
-        FROM items
-        WHERE type='out'
-        GROUP BY project
-      `, [], (err, rows) => {
-
-        let text = "📊 Бугунги ҳисобот:\n\n";
-
-        text += `📥 Кирим: ${inData?.total || 0}\n`;
-        text += `📤 Чиқим: ${outData?.total || 0}\n\n`;
-
-        if (rows && rows.length > 0) {
-          text += "🏗 Лойиҳалар:\n";
-          rows.forEach(r => {
-            text += `- ${r.project}: ${r.total}\n`;
-          });
-        }
-
-        bot.sendMessage(chatId, text);
-      });
-    });
-  });
-
+  let text = `📊 Ҳисобот:\n📥 ${inData.total || 0}\n📤 ${outData.total || 0}`;
+  bot.sendMessage(ADMIN_ID, text);
 });
-// ANALYTICS
-bot.onText(/\/analytics/, (msg) => {
-  const chatId = msg.chat.id;
 
-  // ENG KO‘P TOVAR
-  db.get(`
-    SELECT name, SUM(quantity) as total
-    FROM items
-    WHERE type='out'
-    GROUP BY name
-    ORDER BY total DESC
-    LIMIT 1
-  `, [], (err, topItem) => {
-
-    // ENG KO‘P LOYIHA
-    db.get(`
-      SELECT project, SUM(quantity) as total
-      FROM items
-      WHERE type='out'
-      GROUP BY project
-      ORDER BY total DESC
-      LIMIT 1
-    `, [], (err, topProject) => {
-
-      let text = "📊 Аналитика:\n\n";
-
-      if (topItem) {
-        text += `🔥 Энг кўп кетган товар:\n${topItem.name} — ${topItem.total}\n\n`;
-      }
-
-      if (topProject) {
-        text += `🏗 Энг кўп сарф қилган лойиҳа:\n${topProject.project} — ${topProject.total}\n`;
-      }
-
-      bot.sendMessage(chatId, text);
-    });
-  });
-});
+console.log("🤖 Bot ishlayapti...");
